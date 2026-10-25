@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 using PCG.Generation;
 
 // le uma FloorPlan e constroi a geometria na cena.
@@ -12,18 +13,25 @@ public class HotelBuilder : MonoBehaviour
     public int planHeight = 22;
     public int corridorWidth = 3;
     public int targetRoomWidth = 6;
+    public int doorWidth = 2;
 
     [Header("Escala")]
     public float unitSize = 1f;        // quantos metros vale uma unidade de malha
     public float wallHeight = 3f;
     public float wallThickness = 0.15f;
 
+    // paredes que viram vao de porta, consultadas na hora de construir
+    private HashSet<DoorPlacer.WallKey> doors;
+
     void Start()
     {
         HotelGenerator generator = new HotelGenerator(corridorWidth, targetRoomWidth, seed);
         FloorPlan plan = generator.Generate(new Area(0, 0, planWidth, planHeight), seed);
 
-        Debug.Log($"gerado: {plan.RoomCount} quartos, {plan.CorridorCount} corredor");
+        CellMap map = new CellMap(plan);
+        doors = DoorPlacer.Place(plan, map, doorWidth);
+
+        Debug.Log($"gerado: {plan.RoomCount} quartos, {doors.Count} celulas de porta");
 
         foreach (Corridor c in plan.Corridors)
             CreateFloor(c.Area, "Corridor", new Color(0.78f, 0.72f, 0.60f));
@@ -31,9 +39,7 @@ public class HotelBuilder : MonoBehaviour
         foreach (Room r in plan.Rooms)
             CreateFloor(r.Area, "Room_" + r.Type, new Color(0.86f, 0.84f, 0.78f));
 
-        BuildWalls(plan);
-
-        // PlaceCamera(plan.Bounds);
+        BuildWalls(plan, map);
     }
 
     // cria uma laje fina cobrindo a area informada
@@ -56,9 +62,8 @@ public class HotelBuilder : MonoBehaviour
 
     // percorre a planta celula por celula e levanta parede onde
     // duas celulas vizinhas pertencem a regioes diferentes.
-    void BuildWalls(FloorPlan plan)
+    void BuildWalls(FloorPlan plan, CellMap map)
     {
-        CellMap map = new CellMap(plan);
         Area b = plan.Bounds;
 
         for (int x = b.X; x < b.Right; x++)
@@ -70,27 +75,30 @@ public class HotelBuilder : MonoBehaviour
                 if (here == CellMap.Outside)
                     continue;
 
-                // vizinho da direita: parede vertical em x+1
-                int right = map.At(x + 1, y);
+                if (map.At(x + 1, y) != here)
+                    TryWall(x + 1, y, true, map.At(x + 1, y) == CellMap.Outside);
 
-                if (right != here)
-                    CreateWall(x + 1, y, true, right == CellMap.Outside);
-
-                // vizinho de baixo: parede horizontal em y+1
-                int below = map.At(x, y + 1);
-
-                if (below != here)
-                    CreateWall(x, y + 1, false, below == CellMap.Outside);
+                if (map.At(x, y + 1) != here)
+                    TryWall(x, y + 1, false, map.At(x, y + 1) == CellMap.Outside);
 
                 // bordas de cima e da esquerda so aparecem na primeira
                 // linha e coluna, porque la nao existe celula anterior
                 if (x == b.X && map.At(x - 1, y) != here)
-                    CreateWall(x, y, true, true);
+                    TryWall(x, y, true, true);
 
                 if (y == b.Y && map.At(x, y - 1) != here)
-                    CreateWall(x, y, false, true);
+                    TryWall(x, y, false, true);
             }
         }
+    }
+
+    // levanta a parede, a menos que aquela celula tenha virado porta
+    void TryWall(int x, int y, bool vertical, bool exterior)
+    {
+        if (doors.Contains(new DoorPlacer.WallKey(vertical, x, y)))
+            return;
+
+        CreateWall(x, y, vertical, exterior);
     }
 
     // cria um pedaco de parede de 1 unidade de comprimento.
@@ -106,13 +114,11 @@ public class HotelBuilder : MonoBehaviour
 
         if (vertical)
         {
-            // corre em Z, entao o centro desloca meia unidade em Z
             go.transform.position = new Vector3(px, wallHeight / 2f, pz + unitSize / 2f);
             go.transform.localScale = new Vector3(wallThickness, wallHeight, unitSize);
         }
         else
         {
-            // corre em X
             go.transform.position = new Vector3(px + unitSize / 2f, wallHeight / 2f, pz);
             go.transform.localScale = new Vector3(unitSize, wallHeight, wallThickness);
         }
