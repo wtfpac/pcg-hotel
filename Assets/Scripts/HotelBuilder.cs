@@ -3,8 +3,7 @@ using System.Collections.Generic;
 using PCG.Generation;
 
 // le uma FloorPlan e constroi a geometria na cena.
-// esta e a camada que conversa com a unity, por isso fica fora
-// da pasta Generation, que e c# puro.
+// R regera com semente nova, T mostra ou esconde o teto.
 public class HotelBuilder : MonoBehaviour
 {
     [Header("Parametros de geracao")]
@@ -16,34 +15,85 @@ public class HotelBuilder : MonoBehaviour
     public int doorWidth = 2;
 
     [Header("Escala")]
-    public float unitSize = 1f;        // quantos metros vale uma unidade de malha
+    public float unitSize = 1f;
     public float wallHeight = 3f;
     public float wallThickness = 0.15f;
 
-    // paredes que viram vao de porta, consultadas na hora de construir
+    [Header("Teclas")]
+    public KeyCode regenerateKey = KeyCode.R;
+    public KeyCode toggleCeilingKey = KeyCode.T;
+
     private HashSet<DoorPlacer.WallKey> doors;
+
+    // guardamos tudo que criamos pra conseguir apagar na hora de regerar
+    private readonly List<GameObject> spawned = new List<GameObject>();
+    private readonly List<GameObject> ceilings = new List<GameObject>();
+
+    private bool ceilingVisible = true;
 
     void Start()
     {
+        Build();
+    }
+
+    void Update()
+    {
+        if (Input.GetKeyDown(regenerateKey))
+        {
+            // semente nova a cada vez
+            seed = Random.Range(0, 999999);
+            Build();
+        }
+
+        if (Input.GetKeyDown(toggleCeilingKey))
+        {
+            ceilingVisible = !ceilingVisible;
+
+            foreach (GameObject c in ceilings)
+                c.SetActive(ceilingVisible);
+        }
+    }
+
+    // apaga o hotel anterior e constroi um novo
+    void Build()
+    {
+        Clear();
+
         HotelGenerator generator = new HotelGenerator(corridorWidth, targetRoomWidth, seed);
         FloorPlan plan = generator.Generate(new Area(0, 0, planWidth, planHeight), seed);
 
         CellMap map = new CellMap(plan);
         doors = DoorPlacer.Place(plan, map, doorWidth);
 
-        Debug.Log($"gerado: {plan.RoomCount} quartos, {doors.Count} celulas de porta");
+        Debug.Log($"semente {seed} | {plan.RoomCount} quartos");
 
         foreach (Corridor c in plan.Corridors)
-            CreateFloor(c.Area, "Corridor", new Color(0.78f, 0.72f, 0.60f));
+        {
+            CreateSlab(c.Area, "Corridor", new Color(0.78f, 0.72f, 0.60f), -0.05f);
+            CreateCeiling(c.Area);
+        }
 
         foreach (Room r in plan.Rooms)
-            CreateFloor(r.Area, "Room_" + r.Type, new Color(0.86f, 0.84f, 0.78f));
+        {
+            CreateSlab(r.Area, "Room_" + r.Type, new Color(0.86f, 0.84f, 0.78f), -0.05f);
+            CreateCeiling(r.Area);
+        }
 
         BuildWalls(plan, map);
     }
 
-    // cria uma laje fina cobrindo a area informada
-    void CreateFloor(Area area, string name, Color color)
+    // destroi tudo que foi criado na geracao anterior
+    void Clear()
+    {
+        foreach (GameObject go in spawned)
+            Destroy(go);
+
+        spawned.Clear();
+        ceilings.Clear();
+    }
+
+    // laje horizontal usada tanto pra chao quanto pra teto
+    GameObject CreateSlab(Area area, string name, Color color, float y)
     {
         GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
         go.name = name;
@@ -52,16 +102,26 @@ public class HotelBuilder : MonoBehaviour
         float cx = (area.X + area.Width / 2f) * unitSize;
         float cz = (area.Y + area.Height / 2f) * unitSize;
 
-        go.transform.position = new Vector3(cx, -0.05f, cz);
+        go.transform.position = new Vector3(cx, y, cz);
         go.transform.localScale = new Vector3(area.Width * unitSize,
                                               0.1f,
                                               area.Height * unitSize);
 
         go.GetComponent<Renderer>().material.color = color;
+
+        spawned.Add(go);
+        return go;
     }
 
-    // percorre a planta celula por celula e levanta parede onde
-    // duas celulas vizinhas pertencem a regioes diferentes.
+    // teto vai na mesma posicao do chao, so que la em cima.
+    // guardado numa lista separada pra poder ligar e desligar.
+    void CreateCeiling(Area area)
+    {
+        GameObject go = CreateSlab(area, "Ceiling", new Color(0.92f, 0.90f, 0.86f), wallHeight);
+        go.SetActive(ceilingVisible);
+        ceilings.Add(go);
+    }
+
     void BuildWalls(FloorPlan plan, CellMap map)
     {
         Area b = plan.Bounds;
@@ -81,8 +141,6 @@ public class HotelBuilder : MonoBehaviour
                 if (map.At(x, y + 1) != here)
                     TryWall(x, y + 1, false, map.At(x, y + 1) == CellMap.Outside);
 
-                // bordas de cima e da esquerda so aparecem na primeira
-                // linha e coluna, porque la nao existe celula anterior
                 if (x == b.X && map.At(x - 1, y) != here)
                     TryWall(x, y, true, true);
 
@@ -92,7 +150,6 @@ public class HotelBuilder : MonoBehaviour
         }
     }
 
-    // levanta a parede, a menos que aquela celula tenha virado porta
     void TryWall(int x, int y, bool vertical, bool exterior)
     {
         if (doors.Contains(new DoorPlacer.WallKey(vertical, x, y)))
@@ -101,8 +158,6 @@ public class HotelBuilder : MonoBehaviour
         CreateWall(x, y, vertical, exterior);
     }
 
-    // cria um pedaco de parede de 1 unidade de comprimento.
-    // vertical = true significa que ela corre no eixo Z.
     void CreateWall(int x, int y, bool vertical, bool exterior)
     {
         GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -128,5 +183,7 @@ public class HotelBuilder : MonoBehaviour
             : new Color(0.80f, 0.78f, 0.72f);
 
         go.GetComponent<Renderer>().material.color = color;
+
+        spawned.Add(go);
     }
 }
